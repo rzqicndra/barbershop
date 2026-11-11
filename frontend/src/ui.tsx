@@ -1,6 +1,15 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { ArrowLeft, ArrowRight, X } from 'lucide-react'
-import { statuses, type BookingStatus } from './data'
+import { statuses, type BookingStatus, type Studio } from './data'
+import { api, messageOf } from './api'
 
 export function Mark({ className }: { className?: string }) {
   return (
@@ -17,20 +26,40 @@ export function Mark({ className }: { className?: string }) {
   )
 }
 
-export function Brand({ inverse = false }: { inverse?: boolean }) {
+export const BrandContext = createContext<Studio['profile'] | null>(null)
+
+export function Brand({
+  inverse = false,
+  href = '/#beranda',
+  label,
+}: {
+  inverse?: boolean
+  href?: string
+  label?: string
+}) {
+  const profile = useContext(BrandContext)
+  const name = profile?.name || 'Gilir Barbershop'
+  const wordmark = profile?.wordmark || name.replace(/\s*barbershop$/i, '').toLowerCase()
   return (
     <a
       className={inverse ? 'brand brand-inverse' : 'brand'}
-      href="/#beranda"
-      aria-label="Gilir Barbershop, beranda"
+      href={href}
+      aria-label={label || name + ', beranda'}
     >
-      <span className="brand-mark">
-        <Mark />
-      </span>
-      <span className="brand-type">
-        gilir<span>.</span>
-        <small>BARBERSHOP</small>
-      </span>
+      {profile?.logoImageUrl ? (
+        <img className="brand-image" src={profile.logoImageUrl} alt={name} />
+      ) : (
+        <span className="brand-mark">
+          <Mark />
+        </span>
+      )}
+      {!profile?.logoImageUrl && (
+        <span className="brand-type">
+          {wordmark}
+          <span>.</span>
+          <small>BARBERSHOP</small>
+        </span>
+      )}
     </a>
   )
 }
@@ -93,6 +122,7 @@ export function Modal({
   wide?: boolean
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
   useEffect(() => {
     const element = dialog.current
     element?.showModal()
@@ -102,15 +132,18 @@ export function Modal({
     <dialog
       ref={dialog}
       className={'modal ' + (wide ? 'modal-wide' : '')}
-      aria-labelledby="modal-title"
-      onCancel={onClose}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
       onClick={(e) => {
         if (e.target === dialog.current) onClose()
       }}
     >
       <div className="modal-body">
         <header className="modal-head">
-          <h2 id="modal-title">{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="icon-button" type="button" aria-label="Tutup" onClick={onClose}>
             <X size={20} />
           </button>
@@ -127,5 +160,72 @@ export function Empty({ title, children }: { title: string; children: ReactNode 
       <strong>{title}</strong>
       <p>{children}</p>
     </div>
+  )
+}
+
+export function DeleteDialog({
+  title,
+  description,
+  path,
+  version,
+  onClose,
+  onDeleted,
+}: {
+  title: string
+  description: string
+  path: string
+  version?: number
+  onClose: () => void
+  onDeleted: () => void | Promise<void>
+}) {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  async function remove() {
+    if (pending) return
+    setPending(true)
+    try {
+      await api(path, { method: 'DELETE', body: version === undefined ? undefined : { version } })
+      await onDeleted()
+      onClose()
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <Modal
+      title={title}
+      onClose={() => {
+        if (!pending) onClose()
+      }}
+    >
+      <div className="dialog-form">
+        <p>{description}</p>
+        {error && (
+          <p className="notice notice-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="button button-outline"
+            disabled={pending}
+            onClick={onClose}
+          >
+            Kembali
+          </button>
+          <button
+            type="button"
+            className="button button-danger"
+            disabled={pending}
+            onClick={() => void remove()}
+          >
+            {pending ? 'Menghapus…' : 'Ya, hapus'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }

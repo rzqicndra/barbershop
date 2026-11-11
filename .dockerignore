@@ -7,3 +7,7 @@
 backend/bin
 *.zip
 *.log
+
+data/
+backups/
+docs/images/

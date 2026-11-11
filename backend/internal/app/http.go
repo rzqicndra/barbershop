@@ -8,8 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,24 +22,30 @@ import (
 )
 
 type Options struct {
-	Origin        string
-	ExtraOrigins  []string
-	TokenKey      []byte
-	SecureCookies bool
-	WebDirectory  string
-	Clock         func() time.Time
+	Origin            string
+	ExtraOrigins      []string
+	TokenKey          []byte
+	SecureCookies     bool
+	TrustedProxyCIDRs []string
+	UploadDirectory   string
+	WebDirectory      string
+	Clock             func() time.Time
 }
 
 type App struct {
-	db            *pgxpool.Pool
-	origin        string
-	origins       []string
-	tokenKey      []byte
-	secureCookies bool
-	webDirectory  string
-	now           func() time.Time
-	dummyHash     string
-	limiter       requestLimiter
+	db              *pgxpool.Pool
+	origin          string
+	origins         []string
+	tokenKey        []byte
+	secureCookies   bool
+	trustedProxies  []netip.Prefix
+	uploadSlots     chan struct{}
+	passwordSlots   chan struct{}
+	uploadDirectory string
+	webDirectory    string
+	now             func() time.Time
+	dummyHash       string
+	limiter         requestLimiter
 }
 
 func New(pool *pgxpool.Pool, options Options) (*App, error) {
@@ -49,6 +55,10 @@ func New(pool *pgxpool.Pool, options Options) (*App, error) {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
+	proxies, err := proxyPrefixes(options.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, err
+	}
 	dummy, err := PasswordHash(randomHex(20))
 	if err != nil {
 		return nil, err
@@ -57,7 +67,8 @@ func New(pool *pgxpool.Pool, options Options) (*App, error) {
 		db: pool, origin: strings.TrimRight(options.Origin, "/"),
 		origins:  append([]string{strings.TrimRight(options.Origin, "/")}, options.ExtraOrigins...),
 		tokenKey: options.TokenKey, secureCookies: options.SecureCookies,
-		webDirectory: options.WebDirectory, now: options.Clock, dummyHash: dummy,
+		trustedProxies: proxies, uploadSlots: make(chan struct{}, 2), passwordSlots: make(chan struct{}, 2),
+		uploadDirectory: options.UploadDirectory, webDirectory: options.WebDirectory, now: options.Clock, dummyHash: dummy,
 		limiter: requestLimiter{entries: map[string]limitEntry{}},
 	}, nil
 }
@@ -76,14 +87,18 @@ func (a *App) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(a.headers)
 	r.Use(a.recover)
+	r.Use(a.staffNavigation)
 	r.Get("/api/v1/health", a.handle(a.health))
 	r.Get("/api/v1/public", a.handle(a.publicCatalog))
+	r.Get("/api/v1/reviews", a.handle(a.publicReviews))
+	r.Get("/media/{name}", a.handle(a.media))
 	r.Get("/api/v1/availability", a.handle(a.publicAvailability))
 	r.Post("/api/v1/bookings", a.handle(a.createPublicBooking))
 	r.Get("/api/v1/bookings/current", a.handle(a.customerBooking))
 	r.Get("/api/v1/bookings/current/availability", a.handle(a.customerAvailability))
 	r.Post("/api/v1/bookings/current/reschedule", a.handle(a.customerReschedule))
 	r.Post("/api/v1/bookings/current/cancel", a.handle(a.customerCancel))
+	r.Post("/api/v1/bookings/current/review", a.handle(a.createReview))
 	r.Post("/api/v1/auth/login", a.handle(a.login))
 	r.Group(func(staff chi.Router) {
 		staff.Use(a.requireSession)
@@ -117,6 +132,16 @@ func (a *App) Handler() http.Handler {
 				write.Post("/api/v1/admin/staff", a.handle(a.createStaff))
 				write.Put("/api/v1/admin/staff/{id}", a.handle(a.updateStaff))
 				write.Post("/api/v1/admin/staff/{id}/password", a.handle(a.resetStaffPassword))
+				write.Delete("/api/v1/admin/staff/{id}", a.handle(a.deleteStaff))
+				write.Delete("/api/v1/admin/services/{id}", a.handle(a.deleteService))
+				write.Delete("/api/v1/admin/barbers/{id}", a.handle(a.deleteBarber))
+				write.Post("/api/v1/admin/media", a.handle(a.uploadMedia))
+				write.Post("/api/v1/admin/gallery", a.handle(a.saveGallery))
+				write.Put("/api/v1/admin/gallery/{id}", a.handle(a.saveGallery))
+				write.Delete("/api/v1/admin/gallery/{id}", a.handle(a.deleteContent))
+				write.Post("/api/v1/admin/faqs", a.handle(a.saveFAQ))
+				write.Put("/api/v1/admin/faqs/{id}", a.handle(a.saveFAQ))
+				write.Delete("/api/v1/admin/faqs/{id}", a.handle(a.deleteContent))
 			})
 		})
 	})
@@ -133,9 +158,9 @@ func (a *App) headers(next http.Handler) http.Handler {
 		w.Header().Set("X-Server-Time", a.now().UTC().Format(time.RFC3339Nano))
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src https://www.google.com https://google.com")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/admin") || r.URL.Path == "/" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/admin") || r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		if a.secureCookies {
@@ -201,6 +226,9 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 			p = &problem{Status: 500, Code: "INTERNAL_ERROR", Message: "Permintaan belum berhasil. Silakan coba kembali."}
 		}
 	}
+	if p.Status == http.StatusTooManyRequests || p.Status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "60")
+	}
 	respond(w, p.Status, map[string]any{"error": p})
 }
 
@@ -239,12 +267,18 @@ func (a *App) publicCatalog(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := loadContent(r.Context(), a.db, &catalog, true); err != nil {
+		return err
+	}
 	return respond(w, 200, catalog)
 }
 
 func (a *App) adminCatalog(w http.ResponseWriter, r *http.Request) error {
 	catalog, err := loadCatalog(r.Context(), a.db, false)
 	if err != nil {
+		return err
+	}
+	if err := loadContent(r.Context(), a.db, &catalog, false); err != nil {
 		return err
 	}
 	return respond(w, 200, catalog)
@@ -269,11 +303,7 @@ type requestLimiter struct {
 }
 
 func (a *App) allow(r *http.Request, scope string, maximum int) bool {
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	key := scope + ":" + ip
+	key := scope + ":" + a.clientIP(r)
 	a.limiter.mu.Lock()
 	defer a.limiter.mu.Unlock()
 	now := a.now()

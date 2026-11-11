@@ -18,7 +18,8 @@ export const setCSRF = (value: string) => {
 type RequestOptions = { method?: string; body?: unknown; token?: string; signal?: AbortSignal }
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  const multipart = options.body instanceof FormData
+  if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
   if (csrf) headers['X-CSRF-Token'] = csrf
   if (options.token) headers.Authorization = 'Bearer ' + options.token
   let response: Response
@@ -27,7 +28,11 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       method: options.method ?? 'GET',
       credentials: 'same-origin',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: multipart
+        ? (options.body as FormData)
+        : options.body === undefined
+          ? undefined
+          : JSON.stringify(options.body),
       signal: options.signal,
     })
   } catch (error) {

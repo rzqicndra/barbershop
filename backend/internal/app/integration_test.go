@@ -348,3 +348,126 @@ func TestIntegrationWalkInCutoffAndHTTPValidation(t *testing.T) {
 	f.handler.ServeHTTP(res, req)
 	expectStatus(t, res, 422)
 }
+
+func TestIntegrationStaffNavigation(t *testing.T) {
+	f := newFixture(t)
+	directory := t.TempDir()
+	if err := os.WriteFile(directory+"/index.html", []byte("<html><body>Gilir page entry</body></html>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(directory+"/assets", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(directory+"/assets/site.css", []byte("body { color: black; }"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.app.webDirectory = directory
+	admin := f.login(t, "owner@gilir.test", "Owner-password-2026")
+	account := map[string]string{"email": "raka@gilir.test", "name": "Raka Staff", "password": "Barber-password-2026", "barberId": testRaka}
+	expectStatus(t, f.request("POST", "/api/v1/admin/staff", account, &admin, ""), 200)
+	barber := f.login(t, "raka@gilir.test", "Barber-password-2026")
+	cases := []struct {
+		name, method, path string
+		session            *loginSession
+		status             int
+		location           string
+	}{
+		{"public guest", "GET", "/", nil, 200, ""},
+		{"guest login", "GET", "/admin", nil, 200, ""},
+		{"guest deep link", "GET", "/admin/agenda", nil, 302, "/admin"},
+		{"guest account page", "GET", "/admin/akun", nil, 302, "/admin"},
+		{"admin deletes path", "GET", "/", &admin, 302, "/admin/agenda"},
+		{"admin index alias", "GET", "/index.html", &admin, 302, "/admin/agenda"},
+		{"barber deletes path", "GET", "/", &barber, 302, "/admin/jadwal"},
+		{"admin login page", "GET", "/admin", &admin, 302, "/admin/agenda"},
+		{"barber login page", "GET", "/admin", &barber, 302, "/admin/jadwal"},
+		{"admin agenda", "GET", "/admin/agenda", &admin, 200, ""},
+		{"barber schedule", "GET", "/admin/jadwal", &barber, 200, ""},
+		{"admin wrong home", "GET", "/admin/jadwal", &admin, 302, "/admin/agenda"},
+		{"barber admin agenda", "GET", "/admin/agenda", &barber, 302, "/admin/jadwal"},
+		{"barber settings", "GET", "/admin/pengaturan", &barber, 302, "/admin/jadwal"},
+		{"admin settings", "GET", "/admin/pengaturan", &admin, 200, ""},
+		{"admin account", "GET", "/admin/akun", &admin, 200, ""},
+		{"barber account", "GET", "/admin/akun", &barber, 200, ""},
+		{"unknown staff page", "GET", "/admin/unknown", &admin, 302, "/admin/agenda"},
+		{"canonical trailing slash", "GET", "/admin/agenda/", &admin, 302, "/admin/agenda"},
+		{"head navigation", "HEAD", "/", &barber, 302, "/admin/jadwal"},
+		{"public API remains JSON", "GET", "/api/v1/public", &admin, 200, ""},
+		{"staff API remains JSON", "GET", "/api/v1/staff/bookings?date=2026-11-12", &barber, 200, ""},
+		{"guest API remains unauthorized", "GET", "/api/v1/staff/bookings?date=2026-11-12", nil, 401, ""},
+		{"role API remains forbidden", "GET", "/api/v1/admin/catalog", &barber, 403, ""},
+		{"static asset", "GET", "/assets/site.css", &admin, 200, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := f.request(tc.method, tc.path, nil, tc.session, "")
+			expectStatus(t, response, tc.status)
+			if got := response.Header().Get("Location"); got != tc.location {
+				t.Fatalf("Location %q, want %q", got, tc.location)
+			}
+			if tc.location != "" && response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("session redirect may be cached")
+			}
+		})
+	}
+	fake := admin
+	fake.cookie = &http.Cookie{Name: "gilir_session", Value: strings.Repeat("f", 64)}
+	expectStatus(t, f.request("GET", "/", nil, &fake, ""), 200)
+	expectStatus(t, f.request("POST", "/api/v1/auth/logout", nil, &admin, ""), 200)
+	expectStatus(t, f.request("GET", "/", nil, &admin, ""), 200)
+	expectStatus(t, f.request("GET", "/api/v1/auth/session", nil, &admin, ""), 401)
+	f.now = f.now.Add(13 * time.Hour)
+	expectStatus(t, f.request("GET", "/", nil, &barber, ""), 200)
+	response := f.request("GET", "/admin/jadwal", nil, &barber, "")
+	expectStatus(t, response, 302)
+	if response.Header().Get("Location") != "/admin" {
+		t.Fatal("expired staff session bypassed login")
+	}
+}
+
+func TestIntegrationBarberOwnWorkAndAdminReschedule(t *testing.T) {
+	f := newFixture(t)
+	admin := f.login(t, "owner@gilir.test", "Owner-password-2026")
+	for _, account := range []map[string]string{
+		{"email": "raka@gilir.test", "name": "Raka", "password": "Barber-password-2026", "barberId": testRaka},
+		{"email": "dimas@gilir.test", "name": "Dimas", "password": "Barber-password-2026", "barberId": testDimas},
+	} {
+		expectStatus(t, f.request("POST", "/api/v1/admin/staff", account, &admin, ""), 200)
+	}
+	raka := f.login(t, "raka@gilir.test", "Barber-password-2026")
+	dimas := f.login(t, "dimas@gilir.test", "Barber-password-2026")
+	created := f.request("POST", "/api/v1/bookings", bookingBody(testRaka, 750), nil, "")
+	expectStatus(t, created, 201)
+	booking := readBooking(t, created)
+	replacement := changeRequest{Date: booking.Date, Start: 750, BarberID: testDimas, Version: booking.Version}
+	expectStatus(t, f.request("POST", "/api/v1/admin/bookings/"+booking.ID+"/reschedule", replacement, &admin, ""), 422)
+	replacement.Reason = "Pelanggan meminta pindah ke Dimas"
+	expectStatus(t, f.request("POST", "/api/v1/admin/bookings/"+booking.ID+"/reschedule", replacement, &raka, ""), 403)
+	response := f.request("POST", "/api/v1/admin/bookings/"+booking.ID+"/reschedule", replacement, &admin, "")
+	expectStatus(t, response, 200)
+	updated := readBooking(t, response)
+	expectStatus(t, f.request("GET", "/api/v1/staff/bookings/"+booking.ID, nil, &raka, ""), 404)
+	own := f.request("GET", "/api/v1/staff/bookings/"+booking.ID, nil, &dimas, "")
+	expectStatus(t, own, 200)
+	if strings.Contains(own.Body.String(), "phone") {
+		t.Fatal("barber sees private contact")
+	}
+	mark := map[string]any{"status": "serving", "version": updated.Version}
+	expectStatus(t, f.request("POST", "/api/v1/staff/bookings/"+booking.ID+"/status", mark, &dimas, ""), 422)
+	f.now = time.Date(2026, 11, 12, 12, 30, 0, 0, jakarta)
+	expectStatus(t, f.request("POST", "/api/v1/staff/bookings/"+booking.ID+"/status", mark, &dimas, ""), 200)
+	detail := f.request("GET", "/api/v1/staff/bookings/"+booking.ID, nil, &admin, "")
+	expectStatus(t, detail, 200)
+	shared := readBooking(t, detail)
+	if shared.Status != "serving" {
+		t.Fatal("admin did not see barber's service action")
+	}
+	if !strings.Contains(detail.Body.String(), replacement.Reason) {
+		t.Fatal("admin reason missing from audit history")
+	}
+	expectStatus(t, f.request("POST", "/api/v1/staff/bookings/"+booking.ID+"/status", map[string]any{"status": "completed", "version": shared.Version}, &dimas, ""), 200)
+	final := readBooking(t, f.request("GET", "/api/v1/staff/bookings/"+booking.ID, nil, &admin, ""))
+	if final.Status != "completed" {
+		t.Fatal("barber completion was not persisted for admin")
+	}
+}

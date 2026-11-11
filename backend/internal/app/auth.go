@@ -44,12 +44,18 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &input); err != nil {
 		return err
 	}
+	select {
+	case a.passwordSlots <- struct{}{}:
+		defer func() { <-a.passwordSlots }()
+	default:
+		return &problem{Status: 503, Code: "LOGIN_BUSY", Message: "Pemeriksaan akun sedang penuh. Coba kembali sebentar lagi."}
+	}
 	email, _ := cleanEmail(input.Email)
 	var user User
 	hash := a.dummyHash
 	err := a.db.QueryRow(r.Context(), `SELECT u.id::text,u.email,u.name,u.role,COALESCE(u.barber_id::text,''),u.active,u.password_hash
 		FROM staff u LEFT JOIN barbers b ON b.id=u.barber_id
-		WHERE u.email=$1 AND u.active AND (u.role='admin' OR b.active)`, email).
+		WHERE u.email=$1 AND u.active AND u.deleted_at IS NULL AND (u.role='admin' OR (b.active AND b.deleted_at IS NULL))`, email).
 		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.BarberID, &user.Active, &hash)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
@@ -69,25 +75,34 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) error {
 	return respond(w, 200, map[string]any{"user": user, "csrfToken": csrf})
 }
 
+// sessionFromRequest is shared by document navigation and API authorization.
+// A cookie's presence alone never grants access or determines a role.
+func (a *App) sessionFromRequest(r *http.Request) (authenticated, bool, error) {
+	var auth authenticated
+	cookie, err := r.Cookie("gilir_session")
+	if err != nil || len(cookie.Value) != 64 {
+		return auth, false, nil
+	}
+	auth.Hash = sessionDigest(cookie.Value)
+	err = a.db.QueryRow(r.Context(), `SELECT u.id::text,u.email,u.name,u.role,COALESCE(u.barber_id::text,''),u.active,s.csrf_token
+			FROM sessions s JOIN staff u ON u.id=s.staff_id LEFT JOIN barbers b ON b.id=u.barber_id
+			WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.active AND u.deleted_at IS NULL AND (u.role='admin' OR (b.active AND b.deleted_at IS NULL))`, auth.Hash, a.now()).
+		Scan(&auth.User.ID, &auth.User.Email, &auth.User.Name, &auth.User.Role, &auth.User.BarberID, &auth.User.Active, &auth.CSRF)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth, false, nil
+	}
+	return auth, err == nil, err
+}
+
 func (a *App) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("gilir_session")
-		if err != nil || len(cookie.Value) != 64 {
-			a.fail(w, &problem{Status: 401, Code: "LOGIN_REQUIRED", Message: "Silakan masuk kembali."})
-			return
-		}
-		var auth authenticated
-		auth.Hash = sessionDigest(cookie.Value)
-		err = a.db.QueryRow(r.Context(), `SELECT u.id::text,u.email,u.name,u.role,COALESCE(u.barber_id::text,''),u.active,s.csrf_token
-			FROM sessions s JOIN staff u ON u.id=s.staff_id LEFT JOIN barbers b ON b.id=u.barber_id
-			WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.active AND (u.role='admin' OR b.active)`, auth.Hash, a.now()).
-			Scan(&auth.User.ID, &auth.User.Email, &auth.User.Name, &auth.User.Role, &auth.User.BarberID, &auth.User.Active, &auth.CSRF)
-		if errors.Is(err, pgx.ErrNoRows) {
-			a.fail(w, &problem{Status: 401, Code: "LOGIN_REQUIRED", Message: "Sesi berakhir. Silakan masuk kembali."})
-			return
-		}
+		auth, valid, err := a.sessionFromRequest(r)
 		if err != nil {
 			a.fail(w, err)
+			return
+		}
+		if !valid {
+			a.fail(w, &problem{Status: 401, Code: "LOGIN_REQUIRED", Message: "Sesi berakhir. Silakan masuk kembali."})
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, auth)))

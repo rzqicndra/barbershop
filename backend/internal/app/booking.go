@@ -17,14 +17,14 @@ import (
 )
 
 const bookingSelect = `SELECT b.id::text,b.code,b.service_id::text,b.service_name,b.duration,b.price,
-	b.barber_id::text,b.starts_at,b.ends_at,b.customer,b.phone,b.source,b.status,b.version,b.token_nonce FROM bookings b`
+	b.barber_id::text,b.starts_at,b.ends_at,b.customer,b.phone,b.source,b.status,b.version,b.token_nonce,b.barber_name FROM bookings b`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanBooking(row rowScanner) (Booking, error) {
 	var b Booking
 	err := row.Scan(&b.ID, &b.Code, &b.ServiceID, &b.ServiceName, &b.Duration, &b.Price, &b.BarberID,
-		&b.startsAt, &b.endsAt, &b.Customer, &b.Phone, &b.Source, &b.Status, &b.Version, &b.tokenNonce)
+		&b.startsAt, &b.endsAt, &b.Customer, &b.Phone, &b.Source, &b.Status, &b.Version, &b.tokenNonce, &b.BarberName)
 	at := b.startsAt.In(jakarta)
 	b.Date = at.Format("2006-01-02")
 	b.Start = at.Hour()*60 + at.Minute()
@@ -51,7 +51,7 @@ func (a *App) customerTarget(ctx context.Context, r *http.Request, db queryer) (
 	if err != nil {
 		return Booking{}, err
 	}
-	if b.Source != "online" || !hmac.Equal([]byte(b.tokenNonce), []byte(nonce)) {
+	if !hmac.Equal([]byte(b.tokenNonce), []byte(nonce)) {
 		return Booking{}, &problem{Status: 404, Code: "BOOKING_LINK_INVALID", Message: "Tautan booking tidak tersedia."}
 	}
 	if a.now().After(b.endsAt.AddDate(0, 0, 30)) {
@@ -107,6 +107,9 @@ func (a *App) customerBooking(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := loadBookingReview(r.Context(), a.db, &b); err != nil {
+		return err
+	}
 	return respond(w, 200, b)
 }
 
@@ -116,6 +119,7 @@ func (a *App) staffBooking(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if identity(r).User.Role == "admin" {
+		b.Token = a.bookingToken(b)
 		if err := history(r.Context(), a.db, &b); err != nil {
 			return err
 		}
@@ -225,7 +229,7 @@ func (a *App) create(w http.ResponseWriter, r *http.Request, source string) erro
 			if err != nil {
 				return err
 			}
-			if source == "online" {
+			if source == "online" || user.Role == "admin" {
 				result.Token = a.bookingToken(current)
 			}
 			replayed = true
@@ -258,13 +262,18 @@ func (a *App) create(w http.ResponseWriter, r *http.Request, source string) erro
 			Source: source, Status: "confirmed", Version: 1,
 			startsAt: startsAt, endsAt: startsAt.Add(time.Duration(service.Duration) * time.Minute), tokenNonce: randomHex(16),
 		}
+		for _, barber := range catalog.Barbers {
+			if barber.ID == result.BarberID {
+				result.BarberName = barber.Name
+			}
+		}
 		for attempt := 0; attempt < 3; attempt++ {
 			result.Code = bookingCode()
 			tag, err := tx.Exec(r.Context(), `INSERT INTO bookings
-				(id,code,service_id,service_name,duration,price,barber_id,starts_at,ends_at,customer,phone,source,status,token_nonce)
-				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'confirmed',$13) ON CONFLICT(code) DO NOTHING`,
+				(id,code,service_id,service_name,duration,price,barber_id,starts_at,ends_at,customer,phone,source,status,token_nonce,barber_name)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'confirmed',$13,$14) ON CONFLICT(code) DO NOTHING`,
 				result.ID, result.Code, result.ServiceID, result.ServiceName, result.Duration, result.Price, result.BarberID,
-				result.startsAt, result.endsAt, result.Customer, result.Phone, result.Source, result.tokenNonce)
+				result.startsAt, result.endsAt, result.Customer, result.Phone, result.Source, result.tokenNonce, result.BarberName)
 			if err != nil {
 				return err
 			}
@@ -287,7 +296,7 @@ func (a *App) create(w http.ResponseWriter, r *http.Request, source string) erro
 		}
 		_, err = tx.Exec(r.Context(), "INSERT INTO booking_requests(key,actor_scope,payload_hash,booking_id,response,expires_at) VALUES($1,$2,$3,$4,$5,$6)",
 			input.RequestKey, scope, bodyHash, result.ID, encoded, a.now().Add(24*time.Hour))
-		if err == nil && source == "online" {
+		if err == nil && (source == "online" || user.Role == "admin") {
 			result.Token = a.bookingToken(result)
 		}
 		return err
@@ -372,6 +381,11 @@ func (a *App) modify(w http.ResponseWriter, r *http.Request, customer, moving bo
 				return err
 			}
 			result.Date, result.Start, result.BarberID = input.Date, input.Start, barberID
+			for _, barber := range catalog.Barbers {
+				if barber.ID == barberID {
+					result.BarberName = barber.Name
+				}
+			}
 			result.startsAt, result.endsAt = startsAt, startsAt.Add(time.Duration(result.Duration)*time.Minute)
 			action = "Jadwal diubah"
 			detail = fmt.Sprintf("%s %02d.%02d (%s) -> %s %02d.%02d (%s). %s",
@@ -381,8 +395,8 @@ func (a *App) modify(w http.ResponseWriter, r *http.Request, customer, moving bo
 			result.Status = "cancelled"
 		}
 		result.Version++
-		_, err = tx.Exec(r.Context(), "UPDATE bookings SET barber_id=$1,starts_at=$2,ends_at=$3,status=$4,version=$5 WHERE id=$6",
-			result.BarberID, result.startsAt, result.endsAt, result.Status, result.Version, result.ID)
+		_, err = tx.Exec(r.Context(), "UPDATE bookings SET barber_id=$1,starts_at=$2,ends_at=$3,status=$4,version=$5,barber_name=$7 WHERE id=$6",
+			result.BarberID, result.startsAt, result.endsAt, result.Status, result.Version, result.ID, result.BarberName)
 		if err != nil {
 			return err
 		}
@@ -416,6 +430,15 @@ func (a *App) changeStatus(w http.ResponseWriter, r *http.Request) error {
 		valid = valid || previous.Status == "serving" && input.Status == "completed"
 		if !valid {
 			return invalid("Perubahan status atau waktu pelayanan tidak sesuai.")
+		}
+		if input.Status == "serving" {
+			var busy bool
+			if err := tx.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM bookings WHERE barber_id=$1 AND status='serving' AND id<>$2)", previous.BarberID, previous.ID).Scan(&busy); err != nil {
+				return err
+			}
+			if busy {
+				return conflict("BARBER_BUSY", "Barber masih melayani kunjungan lain. Catat selesai pada kunjungan tersebut sebelum memulai layanan berikutnya.")
+			}
 		}
 		result = previous
 		result.Status, result.Version = input.Status, previous.Version+1

@@ -20,13 +20,19 @@ func Seed(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	services := []Service{
-		{ID: "11111111-1111-4111-8111-111111111111", Name: "Potong rambut", Description: "Konsultasi singkat, potong, dan styling ringan.", Price: 65000, Duration: 45},
-		{ID: "22222222-2222-4222-8222-222222222222", Name: "Potong + cuci", Description: "Potong rambut dengan cuci dan styling setelahnya.", Price: 85000, Duration: 60},
-		{ID: "33333333-3333-4333-8333-333333333333", Name: "Rapikan jenggot", Description: "Rapikan garis pipi, kumis, dan jenggot.", Price: 35000, Duration: 30},
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "Potong rambut", Description: "Konsultasi singkat, potong, dan styling ringan.", Price: 65000, Duration: 45, Active: true, Category: "Potong & styling"},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "Potong + cuci", Description: "Potong rambut dengan cuci dan styling setelahnya.", Price: 85000, Duration: 60, Active: true, Category: "Potong & styling"},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "Rapikan jenggot", Description: "Rapikan garis pipi, kumis, dan jenggot.", Price: 35000, Duration: 30, Active: true, Category: "Jenggot"},
 	}
+	services = append(services,
+		Service{ID: "44444444-4444-4444-8444-444444444444", Name: "Hair coloring", Description: "Pewarnaan rambut dengan pilihan warna sesuai konsultasi.", Price: 250000, Duration: 150, Category: "Coloring"},
+		Service{ID: "55555555-5555-4555-8555-555555555555", Name: "Perming", Description: "Pembentukan gelombang atau ikal sesuai karakter rambut.", Price: 350000, Duration: 180, Category: "Tekstur"},
+		Service{ID: "66666666-6666-4666-8666-666666666666", Name: "Keratin treatment", Description: "Perawatan keratin untuk hasil rambut lebih mudah ditata.", Price: 300000, Duration: 150, Category: "Perawatan"},
+		Service{ID: "77777777-7777-4777-8777-777777777777", Name: "Hair & scalp treatment", Description: "Perawatan rambut dan kulit kepala sesuai kebutuhan.", Price: 100000, Duration: 60, Category: "Perawatan"},
+	)
 	for _, service := range services {
-		if _, err = tx.Exec(ctx, `INSERT INTO services(id,name,description,price,duration) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`,
-			service.ID, service.Name, service.Description, service.Price, service.Duration); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO services(id,name,description,price,duration,active,category) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO NOTHING`,
+			service.ID, service.Name, service.Description, service.Price, service.Duration, service.Active, service.Category); err != nil {
 			return err
 		}
 	}

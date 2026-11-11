@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
 import {
   ArrowRight,
   ArrowUpRight,
@@ -6,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Copy,
   LogOut,
   Plus,
   Settings2,
@@ -17,7 +26,6 @@ import {
   money,
   parseTime,
   shortDate,
-  statusActions,
   statuses,
   suitableBarbers,
   time,
@@ -32,13 +40,29 @@ import {
   type User,
   type StudioProps,
 } from './data'
-import { BackLink, Brand, Empty, Kicker, Mark, Modal, Status } from './ui'
+import {
+  BackLink,
+  Brand,
+  BrandContext,
+  DeleteDialog,
+  Empty,
+  Kicker,
+  Mark,
+  Modal,
+  Status,
+} from './ui'
 import { ManageDialog } from './booking'
 import { PublicFooter } from './public'
 import { api, APIError, availabilityPath, messageOf, setCSRF, useSlots } from './api'
 import { StaffAccounts, TimeOffSettings } from './staff-settings'
+import { ServiceActions } from './service-actions'
+import { staffHome } from './navigation'
+import { FAQSettings, GallerySettings, PublicPageSettings } from './public-settings'
+import { PublicReviews } from './reviews'
+import { randomId } from './random-id'
 
 export function StaffLogin({ signIn }: { signIn: (user: User) => void }) {
+  const profile = useContext(BrandContext)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [pending, setPending] = useState(false)
@@ -74,7 +98,9 @@ export function StaffLogin({ signIn }: { signIn: (user: User) => void }) {
         <BackLink />
         <div className="login-grid">
           <div className="login-cover">
-            <Kicker>GILIR / AREA STAF</Kicker>
+            <Kicker>
+              {(profile?.wordmark || profile?.name || 'BARBERSHOP').toUpperCase()} / AREA STAF
+            </Kicker>
             <div>
               <h2>
                 Jadwal
@@ -142,11 +168,15 @@ export function StaffShell({
   children: ReactNode
 }) {
   const role = user.role
+  const profile = useContext(BrandContext)
   return (
     <div className="staff-shell">
       <aside className="staff-sidebar">
         <div className="sidebar-brand">
-          <Brand />
+          <Brand
+            href={staffHome(role)}
+            label={(profile?.name || 'Gilir Barbershop') + ', dashboard staf'}
+          />
           <span>RUANG STAF</span>
         </div>
         <nav aria-label="Navigasi staf" className="staff-nav">
@@ -172,10 +202,6 @@ export function StaffShell({
           </a>
         </nav>
         <div className="staff-sidebar-bottom">
-          <a href="/#beranda" className="text-link">
-            Lihat website
-            <ArrowUpRight size={15} />
-          </a>
           <div className="staff-account">
             <span className="staff-avatar" aria-hidden="true">
               {user.name[0]}
@@ -243,7 +269,7 @@ function WalkInDialog({
     }
     const fingerprint = JSON.stringify(body)
     if (request.current.fingerprint !== fingerprint)
-      request.current = { fingerprint, key: crypto.randomUUID() }
+      request.current = { fingerprint, key: randomId() }
     setPending(true)
     setError('')
     try {
@@ -397,13 +423,9 @@ function DetailDialog({
   onUpdated: () => void
 }) {
   const [error, setError] = useState('')
-  const actions = statusActions(booking)
-  const barberName = studio.barbers.find((b) => b.id === booking.barberId)?.name ?? 'Barber'
-  const actionName: Partial<Record<BookingStatus, string>> = {
-    serving: 'Mulai layanan',
-    completed: 'Tandai selesai',
-    'no-show': 'Tandai tidak hadir',
-  }
+  const barberName =
+    booking.barberName || studio.barbers.find((b) => b.id === booking.barberId)?.name || 'Barber'
+  const [copyMessage, setCopyMessage] = useState('')
   const [pending, setPending] = useState(false)
   async function mark(status: BookingStatus) {
     if (pending) return
@@ -459,38 +481,57 @@ function DetailDialog({
             <dd>{money(booking.price)}</dd>
           </div>
         </dl>
-        {actions.length > 0 && (
-          <div className="detail-actions">
-            {actions.map((action, index) => (
-              <button
-                key={action}
-                type="button"
-                className={'button ' + (index === 0 ? 'button-primary' : 'button-outline')}
-                disabled={pending}
-                onClick={() => void mark(action)}
-              >
-                {actionName[action]}
-              </button>
-            ))}
+        {role === 'admin' && booking.token && (
+          <div className="customer-link-share">
+            <button
+              className="button button-outline"
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(
+                    window.location.origin + '/#booking/' + booking.token,
+                  )
+                  setCopyMessage('Tautan pelanggan disalin.')
+                } catch {
+                  setCopyMessage(
+                    'Penyalinan belum berhasil. Coba gunakan browser yang mendukung clipboard.',
+                  )
+                }
+              }}
+            >
+              <Copy size={15} />
+              Salin tautan pelanggan
+            </button>
+            <small>
+              Bagikan agar pelanggan dapat membuka kunjungan dan memberi ulasan setelah selesai.
+            </small>
+            <span role="status">{copyMessage}</span>
           </div>
         )}
+        <ServiceActions booking={booking} pending={pending} onChange={mark} />
         {role === 'admin' && canManage(booking, 'admin') && (
-          <div className="detail-actions">
-            <button
-              type="button"
-              className="button button-outline"
-              onClick={() => onManage('move')}
-            >
-              Ubah jadwal / barber
-            </button>
-            <button
-              type="button"
-              className="text-link danger-text"
-              onClick={() => onManage('cancel')}
-            >
-              Batalkan booking
-            </button>
-          </div>
+          <section className="booking-management" aria-label="Pengaturan kunjungan">
+            <p className="muted">
+              Atur ulang jika pelanggan meminta perubahan atau barber berhalangan. Alasan wajib
+              dicatat.
+            </p>
+            <div className="detail-actions">
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={() => onManage('move')}
+              >
+                Ubah jadwal / barber
+              </button>
+              <button
+                type="button"
+                className="text-link danger-text"
+                onClick={() => onManage('cancel')}
+              >
+                Batalkan booking
+              </button>
+            </div>
+          </section>
         )}
         {error && (
           <p className="notice notice-error" role="alert">
@@ -609,7 +650,7 @@ export function Agenda({
           <p>
             {role === 'admin'
               ? 'Lihat booking online dan walk-in dalam satu agenda.'
-              : 'Lihat kunjungan yang ditugaskan kepadamu dan catat status layanan.'}
+              : 'Buka detail kunjunganmu untuk memulai dan menyelesaikan layanan.'}
           </p>
         </div>
         {role === 'admin' && (
@@ -770,14 +811,18 @@ export function Agenda({
                         · {b.source === 'online' ? 'Online' : 'Walk-in'}
                         {role === 'admin'
                           ? ' · ' +
-                            (studio.barbers.find((barber) => barber.id === b.barberId)?.name ?? '')
+                            (b.barberName ||
+                              studio.barbers.find((barber) => barber.id === b.barberId)?.name ||
+                              '')
                           : ''}
                       </span>
                     </small>
                   </td>
                   {role === 'admin' && (
                     <td className="table-barber">
-                      {studio.barbers.find((p) => p.id === b.barberId)?.name ?? 'Barber'}
+                      {b.barberName ||
+                        studio.barbers.find((p) => p.id === b.barberId)?.name ||
+                        'Barber'}
                     </td>
                   )}
                   <td className="table-source">{b.source === 'online' ? 'Online' : 'Walk-in'}</td>
@@ -862,12 +907,13 @@ function ServiceEditor({
 }) {
   const [draft, setDraft] = useState<Service>(
     service ?? {
-      id: crypto.randomUUID(),
+      id: randomId(),
       name: '',
       description: '',
       price: 0,
       duration: 45,
       active: true,
+      category: 'Potong & styling',
       version: 0,
     },
   )
@@ -899,6 +945,16 @@ function ServiceEditor({
           />
         </label>
         <label className="field">
+          <span>Kategori</span>
+          <input
+            required
+            maxLength={50}
+            value={draft.category || 'Potong & styling'}
+            onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+            placeholder="Potong & styling, Coloring, Perawatan…"
+          />
+        </label>
+        <label className="field">
           <span>Deskripsi</span>
           <textarea
             rows={2}
@@ -925,7 +981,7 @@ function ServiceEditor({
               type="number"
               required
               min="15"
-              max="180"
+              max="360"
               value={draft.duration}
               onChange={(e) => setDraft({ ...draft, duration: Number(e.target.value) })}
             />
@@ -1102,12 +1158,18 @@ function BarberEditor({
   )
 }
 
-export function Settings({ studio, refresh }: StudioProps) {
+export function Settings({ studio, refresh, userId }: StudioProps & { userId: string }) {
   const [tab, setTab] = useState('profil')
   const [profile, setProfile] = useState(studio.profile)
   const [closure, setClosure] = useState('')
   const [serviceId, setService] = useState<string | null>(null)
   const [barberId, setBarber] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<{
+    kind: 'services' | 'barbers'
+    id: string
+    name: string
+    version: number
+  } | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
@@ -1128,6 +1190,9 @@ export function Settings({ studio, refresh }: StudioProps) {
         } as Barber)
       : studio.barbers.find((b) => b.id === barberId)
   useEffect(() => setProfile(studio.profile), [studio.profile.version])
+  useEffect(() => {
+    void refresh().catch((err) => setError(messageOf(err)))
+  }, [tab, refresh])
   async function commit(path: string, body: unknown, method = 'PUT') {
     try {
       const catalog = await api<typeof studio>(path, { method, body })
@@ -1161,10 +1226,14 @@ export function Settings({ studio, refresh }: StudioProps) {
       <div className="settings-tabs" aria-label="Kategori pengaturan">
         {[
           ['profil', 'Profil & jam buka'],
+          ['publik', 'Tampilan publik'],
           ['layanan', 'Layanan'],
           ['barber', 'Barber'],
           ['izin', 'Izin barber'],
           ['akun', 'Akun staf'],
+          ['galeri', 'Galeri'],
+          ['faq', 'FAQ'],
+          ['ulasan', 'Ulasan'],
         ].map(([key, label]) => (
           <button
             type="button"
@@ -1194,7 +1263,7 @@ export function Settings({ studio, refresh }: StudioProps) {
               <input
                 required
                 value={profile.name}
-                maxLength={60}
+                maxLength={80}
                 onChange={(e) => setProfile({ ...profile, name: e.target.value })}
               />
             </label>
@@ -1203,7 +1272,7 @@ export function Settings({ studio, refresh }: StudioProps) {
               <input
                 required
                 value={profile.location}
-                maxLength={75}
+                maxLength={200}
                 onChange={(e) => setProfile({ ...profile, location: e.target.value })}
               />
             </label>
@@ -1234,6 +1303,50 @@ export function Settings({ studio, refresh }: StudioProps) {
               />
             </label>
           </div>
+          <h3>Kontak & lokasi</h3>
+          <div className="form-pair">
+            <label className="field">
+              <span>Tautan Google Maps</span>
+              <input
+                type="url"
+                value={profile.mapsUrl || ''}
+                onChange={(e) => setProfile({ ...profile, mapsUrl: e.target.value })}
+                placeholder="https://maps.app.goo.gl/…"
+              />
+            </label>
+            <label className="field">
+              <span>WhatsApp usaha</span>
+              <input
+                type="tel"
+                maxLength={24}
+                value={profile.whatsapp || ''}
+                onChange={(e) => setProfile({ ...profile, whatsapp: e.target.value })}
+                placeholder="08… atau 628…"
+              />
+            </label>
+          </div>
+          <label className="field">
+            <span>Instagram</span>
+            <input
+              maxLength={300}
+              value={profile.instagramUrl || ''}
+              onChange={(e) => setProfile({ ...profile, instagramUrl: e.target.value })}
+              placeholder="@namabarbershop atau https://www.instagram.com/…"
+            />
+          </label>
+          <label className="field">
+            <span>Sematan peta Google Maps</span>
+            <textarea
+              rows={3}
+              maxLength={4500}
+              value={profile.mapsEmbedUrl || ''}
+              onChange={(e) => setProfile({ ...profile, mapsEmbedUrl: e.target.value })}
+            />
+            <small>
+              Di Google Maps pilih Bagikan → Sematkan peta → Salin HTML. Tempel kode atau URL src di
+              sini. Gunakan titik lokasi usaha yang sebenarnya.
+            </small>
+          </label>
           <h3>Tanggal tutup</h3>
           <div className="closure-row">
             <input
@@ -1316,17 +1429,33 @@ export function Settings({ studio, refresh }: StudioProps) {
                     {service.active ? 'Aktif' : 'Nonaktif'}
                   </small>
                 </span>
-                <button
-                  type="button"
-                  className="button button-outline"
-                  aria-label={'Edit ' + service.name}
-                  onClick={() => {
-                    setMessage('')
-                    setService(service.id)
-                  }}
-                >
-                  Edit
-                </button>
+                <div className="account-actions">
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    aria-label={'Edit ' + service.name}
+                    onClick={() => {
+                      setMessage('')
+                      setService(service.id)
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="text-link danger-text"
+                    onClick={() =>
+                      setDeleting({
+                        kind: 'services',
+                        id: service.id,
+                        name: service.name,
+                        version: service.version,
+                      })
+                    }
+                  >
+                    Hapus
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -1356,24 +1485,62 @@ export function Settings({ studio, refresh }: StudioProps) {
                     {time(b.start)}–{time(b.end)} WIB · {b.active ? 'Aktif' : 'Nonaktif'}
                   </small>
                 </span>
-                <button
-                  type="button"
-                  className="button button-outline"
-                  aria-label={'Atur ' + b.name}
-                  onClick={() => {
-                    setMessage('')
-                    setBarber(b.id)
-                  }}
-                >
-                  Atur jadwal
-                </button>
+                <div className="account-actions">
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    aria-label={'Atur ' + b.name}
+                    onClick={() => {
+                      setMessage('')
+                      setBarber(b.id)
+                    }}
+                  >
+                    Atur jadwal
+                  </button>
+                  <button
+                    type="button"
+                    className="text-link danger-text"
+                    onClick={() =>
+                      setDeleting({ kind: 'barbers', id: b.id, name: b.name, version: b.version })
+                    }
+                  >
+                    Hapus
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         </section>
       )}
       {tab === 'izin' && <TimeOffSettings studio={studio} refresh={refresh} />}
-      {tab === 'akun' && <StaffAccounts studio={studio} />}
+      {tab === 'akun' && <StaffAccounts studio={studio} userId={userId} />}
+      {tab === 'publik' && <PublicPageSettings studio={studio} refresh={refresh} />}
+      {tab === 'galeri' && <GallerySettings studio={studio} refresh={refresh} />}
+      {tab === 'faq' && <FAQSettings studio={studio} refresh={refresh} />}
+      {tab === 'ulasan' && (
+        <section className="settings-panel">
+          <h2>Ulasan pelanggan</h2>
+          <p>
+            Penilaian berasal dari kunjungan selesai. Rating dan komentar pelanggan tidak diubah
+            oleh Admin.
+          </p>
+          <PublicReviews studio={studio} />
+        </section>
+      )}
+      {deleting && (
+        <DeleteDialog
+          title={'Hapus ' + deleting.name + '?'}
+          description={
+            deleting.kind === 'barbers'
+              ? 'Profil barber dan akun yang terhubung akan dihapus dari daftar aktif. Booking aktif harus ditangani terlebih dahulu. Riwayat kunjungan tetap tersimpan.'
+              : 'Layanan dihapus dari katalog. Booking aktif harus ditangani terlebih dahulu. Riwayat dan harga kunjungan lama tetap tersimpan.'
+          }
+          path={'/admin/' + deleting.kind + '/' + deleting.id}
+          version={deleting.version}
+          onClose={() => setDeleting(null)}
+          onDeleted={refresh}
+        />
+      )}
       {serviceId !== null && (
         <ServiceEditor
           service={studio.services.find((s) => s.id === serviceId)}

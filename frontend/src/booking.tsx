@@ -27,7 +27,9 @@ import {
 } from './data'
 import { BackLink, BookingLink, Empty, Kicker, Modal, Status } from './ui'
 import { PublicFooter, PublicHeader } from './public'
+import { BookingReview } from './reviews'
 import { api, APIError, availabilityPath, messageOf, useSlots } from './api'
+import { randomId } from './random-id'
 
 export function DateStrip({ date, onChange }: { date: string; onChange: (value: string) => void }) {
   const first = today()
@@ -315,7 +317,7 @@ export function BookingWizard({
     }
     const fingerprint = JSON.stringify(body)
     if (request.current.fingerprint !== fingerprint)
-      request.current = { fingerprint, key: crypto.randomUUID() }
+      request.current = { fingerprint, key: randomId() }
     lock.current = true
     setPending(true)
     setErrors({})
@@ -760,21 +762,36 @@ export function BookingTicket({
   const [booking, setBooking] = useState<Booking | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const ticketRequest = useRef(0)
   const reload = useCallback(async () => {
+    const request = ++ticketRequest.current
     try {
-      setBooking(await api<Booking>('/bookings/current', { token }))
+      const value = await api<Booking>('/bookings/current', { token })
+      if (request !== ticketRequest.current) return
+      setBooking(value)
       setError('')
     } catch (err) {
+      if (request !== ticketRequest.current) return
       setError(messageOf(err))
       if (err instanceof APIError && [404, 410].includes(err.status)) setBooking(null)
     } finally {
-      setLoading(false)
+      if (request === ticketRequest.current) setLoading(false)
     }
   }, [token])
   useEffect(() => {
     void reload()
+    const visible = () => {
+      if (!document.hidden) void reload()
+    }
+    const timer = window.setInterval(visible, 30_000)
     window.addEventListener('focus', reload)
-    return () => window.removeEventListener('focus', reload)
+    document.addEventListener('visibilitychange', visible)
+    return () => {
+      ticketRequest.current++
+      window.clearInterval(timer)
+      window.removeEventListener('focus', reload)
+      document.removeEventListener('visibilitychange', visible)
+    }
   }, [reload])
   const link = window.location.origin + window.location.pathname + '#booking/' + token
 
@@ -812,7 +829,9 @@ export function BookingTicket({
                 </span>
               )}
               <div>
-                <Kicker>BOOKING ONLINE</Kicker>
+                <Kicker>
+                  {booking.source === 'online' ? 'BOOKING ONLINE' : 'KUNJUNGAN DI TEMPAT'}
+                </Kicker>
                 <h1>
                   {created && booking.status === 'confirmed'
                     ? 'Jadwalmu sudah dicatat.'
@@ -847,7 +866,9 @@ export function BookingTicket({
                     <div>
                       <dt>Barber</dt>
                       <dd>
-                        {studio.barbers.find((b) => b.id === booking.barberId)?.name ?? 'Barber'}
+                        {booking.barberName ||
+                          studio.barbers.find((b) => b.id === booking.barberId)?.name ||
+                          'Barber'}
                       </dd>
                     </div>
                     <div>
@@ -914,6 +935,14 @@ export function BookingTicket({
                 )}
               </aside>
             </div>
+            <BookingReview
+              booking={booking}
+              token={token}
+              onUpdated={async () => {
+                await reload()
+                await refresh()
+              }}
+            />
             {action && (
               <ManageDialog
                 studio={studio}

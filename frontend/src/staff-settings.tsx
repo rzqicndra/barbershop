@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, messageOf } from './api'
 import { longDate, parseTime, time, today, type Studio, type StudioProps, type User } from './data'
-import { Kicker, Modal } from './ui'
+import { DeleteDialog, Kicker, Modal } from './ui'
 
 export function AccountPage({ user, onChanged }: { user: User; onChanged: () => void }) {
   const [currentPassword, setCurrent] = useState('')
@@ -224,12 +224,13 @@ export function TimeOffSettings({ studio, refresh }: StudioProps) {
     </section>
   )
 }
-export function StaffAccounts({ studio }: { studio: Studio }) {
+export function StaffAccounts({ studio, userId }: { studio: Studio; userId: string }) {
   const [staff, setStaff] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [editor, setEditor] = useState<User | 'new' | null>(null)
+  const [deleting, setDeleting] = useState<User | null>(null)
   const [pending, setPending] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
@@ -293,29 +294,54 @@ export function StaffAccounts({ studio }: { studio: Studio }) {
                 {user.email} · {user.active ? 'Aktif' : 'Nonaktif'}
               </small>
             </span>
-            {user.role === 'barber' && (
-              <div className="account-actions">
-                <button
-                  type="button"
-                  className="button button-outline"
-                  disabled={pending}
-                  onClick={() => setEditor(user)}
-                >
-                  Reset sandi
-                </button>
-                <button
-                  type="button"
-                  className="text-link"
-                  disabled={pending}
-                  onClick={() => void toggle(user)}
-                >
-                  {user.active ? 'Nonaktifkan' : 'Aktifkan'}
-                </button>
-              </div>
-            )}
+            <div className="account-actions">
+              {user.role === 'barber' && (
+                <>
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    disabled={pending}
+                    onClick={() => setEditor(user)}
+                  >
+                    Reset sandi
+                  </button>
+                  <button
+                    type="button"
+                    className="text-link"
+                    disabled={pending}
+                    onClick={() => void toggle(user)}
+                  >
+                    {user.active ? 'Nonaktifkan' : 'Aktifkan'}
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="text-link danger-text"
+                disabled={pending || user.id === userId}
+                title={
+                  user.id === userId ? 'Akun yang sedang dipakai tidak dapat dihapus' : undefined
+                }
+                onClick={() => setDeleting(user)}
+              >
+                {user.id === userId ? 'Akun ini' : 'Hapus akun'}
+              </button>
+            </div>
           </div>
         ))}
       </div>
+      {deleting && (
+        <DeleteDialog
+          title={'Hapus akun ' + deleting.name + '?'}
+          description="Akun akan dihapus dari daftar staf dan seluruh sesinya diakhiri. Profil barber dan riwayat booking tetap tersimpan."
+          path={'/admin/staff/' + deleting.id}
+          onClose={() => setDeleting(null)}
+          onDeleted={async () => {
+            setStaff(await api<User[]>('/admin/staff'))
+            setMessage('Akun berhasil dihapus.')
+          }}
+        />
+      )}
       {editor && (
         <StaffAccountEditor
           user={editor === 'new' ? undefined : editor}

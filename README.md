@@ -1,8 +1,10 @@
 # Gilir Barbershop
 
+Versi 0.2.2. Untuk proyek yang sudah berjalan, ikuti [panduan pembaruan](docs/PEMBARUAN_0_2_2.md). Pembaruan dari 0.2.1 tidak membutuhkan migrasi baru. Jika masih memakai versi lebih lama, ikuti migrasi 0.2.1 terlebih dahulu. Baca [hasil pemeriksaan kesiapan deploy](docs/AUDIT_DEPLOY.md) dan [panduan server](docs/DEPLOY_PRODUKSI.md) sebelum rilis publik.
+
 Website booking untuk satu barbershop dengan beberapa barber. Frontend React mempertahankan rancangan Gilir yang sudah dibuat. Backend Go menyimpan booking, sesi staf, dan jadwal di PostgreSQL.
 
-Versi pertama ini mencakup booking tanpa akun pelanggan, tautan privat per booking, perubahan dan pembatalan jadwal, agenda staf, walk-in, pengaturan usaha, serta akun Admin dan Barber. Pembayaran dilakukan di tempat. Integrasi WhatsApp otomatis, pembayaran online, multi-cabang, dan Super Admin belum termasuk.
+Website mencakup booking tanpa akun pelanggan, tautan privat per booking, perubahan dan pembatalan jadwal, agenda staf, walk-in, pengaturan usaha, serta akun Admin dan Barber. Versi ini menambahkan hapus akun/barber/layanan, konten publik dinamis, galeri foto, Maps, Instagram, WhatsApp, dan ulasan dari kunjungan selesai. Pembayaran dilakukan di tempat. Pengiriman WhatsApp otomatis, pembayaran online, multi-cabang, dan Super Admin belum termasuk.
 
 ## Mulai dari sini di Windows
 
@@ -13,7 +15,7 @@ Untuk menjalankan website, siapkan:
 | [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) | Menjalankan Go, PostgreSQL, dan proses build frontend di container Linux | Wajib untuk langkah di bawah |
 | [VS Code](https://code.visualstudio.com/) | Membaca dan mengubah proyek | Disarankan |
 | [Git](https://git-scm.com/downloads) | Mencatat perubahan kode | Disarankan |
-| [Go](https://go.dev/doc/install), versi 1.27.x | Mengembangkan backend langsung di laptop | Opsional pada tahap pertama |
+| [Go](https://go.dev/doc/install), minimal versi 1.27.4 | Mengembangkan backend langsung di laptop | Opsional pada tahap pertama |
 | [Node.js](https://nodejs.org/en/download), versi 24 LTS | Mengembangkan frontend langsung di laptop | Opsional pada tahap pertama |
 
 Go dan Node sudah tersedia di tahap build Docker. Kamu belum perlu memasang keduanya di Windows untuk mencoba website. Tidak perlu memasang PostgreSQL secara terpisah atau menggunakan XAMPP untuk proyek ini.
@@ -49,15 +51,15 @@ Jalankan satu per satu. Tunggu setiap perintah selesai sebelum melanjutkan. Buil
 ```powershell
 docker compose build app
 docker compose up -d db
-docker compose run --rm tools migrate
-docker compose run --rm tools seed
+docker compose run --rm --interactive=false tools migrate
+docker compose run --rm --interactive=false tools seed
 docker compose run --rm tools admin:create
 docker compose up -d app
 ```
 
 Saat `admin:create`, isi email, nama, kata sandi 12–128 karakter, dan konfirmasinya. Kata sandi tidak terlihat ketika diketik. Tidak ada akun atau kata sandi bawaan.
 
-`migrate` membuat struktur database. `seed` menambahkan tiga layanan dan tiga profil barber sesuai rancangan awal, tanpa membuat pelanggan, booking, atau akun barber. Menjalankan ulang `seed` tidak menimpa katalog yang sudah diedit.
+`migrate` membuat atau memperbarui struktur database. `seed` menambahkan tiga layanan awal, tiga profil barber, dan empat contoh layanan tambahan: coloring, perming, keratin, serta hair & scalp treatment. Empat layanan tambahan berstatus nonaktif. Sesuaikan harga dan durasinya, pilih barber yang mampu melayani, lalu aktifkan. Tidak ada pelanggan, booking, ulasan, atau akun barber contoh yang dibuat. Menjalankan ulang `seed` tidak menimpa katalog yang sudah diedit atau mengembalikan data yang sudah dihapus.
 
 Buka:
 
@@ -65,7 +67,7 @@ Buka:
 - Login staf di [http://localhost:8080/admin](http://localhost:8080/admin).
 - Status backend di [http://localhost:8080/api/v1/health](http://localhost:8080/api/v1/health).
 
-Setelah login sebagai Admin, buka Pengaturan. Sesuaikan profil usaha, harga, jadwal barber, dan hari tutup. Pada tab Akun staf, buat akun untuk masing-masing profil barber. Barber masuk melalui `/admin` yang sama dan mendapat halaman Jadwal saya berdasarkan akun yang terdaftar.
+Setelah login sebagai Admin, buka Pengaturan. Sesuaikan profil usaha, harga, jadwal barber, dan hari tutup. Masukkan kontak usaha dan sematan Google Maps pada Profil & jam buka. Ubah logo, foto pembuka, dan teks pada Tampilan publik. Unggah foto pelanggan asli melalui Galeri, lalu konfirmasi izin dan publikasikan. Pada tab Akun staf, buat akun untuk masing-masing profil barber. Barber masuk melalui `/admin` yang sama dan mendapat halaman Jadwal saya berdasarkan akun yang terdaftar.
 
 Nama barber, alamat, harga, dan foto awal merupakan materi contoh dari rancangan. Sesuaikan sebelum dipakai oleh usaha sebenarnya.
 
@@ -85,14 +87,18 @@ docker compose down
 docker compose up -d
 
 # Memperbarui kode aplikasi setelah mengubah frontend atau backend
+docker compose stop app
 docker compose build app
-docker compose run --rm tools migrate
+docker compose run --rm --interactive=false tools migrate
+docker compose run --rm --interactive=false tools seed
 docker compose up -d app
 ```
 
-Data berada di volume `pgdata`, bukan di container aplikasi. `docker compose down -v` menghapus volume database. Jangan gunakan opsi `-v` pada data yang ingin disimpan. Mengganti nilai kata sandi di `.env` tidak mengganti kata sandi pada database yang sudah diinisialisasi.
+Data database berada di volume `pgdata` dan foto unggahan berada di volume `uploads`. Pada proyek Compose bernama `gilir`, nama volumenya `gilir_pgdata` dan `gilir_uploads`. `docker compose down -v` menghapus keduanya. Jangan gunakan opsi `-v` pada data yang ingin disimpan. Mengganti nilai kata sandi di `.env` tidak mengganti kata sandi pada database yang sudah diinisialisasi.
 
 Jika port 8080 sudah dipakai, ubah `APP_PORT=8081` dan `PUBLIC_ORIGIN=http://localhost:8081` di `.env`, lalu jalankan `docker compose up -d app`.
+
+Untuk mencoba dari HP tanpa deploy, ikuti [akses HP melalui Wi-Fi lokal](docs/AKSES_HP_LOKAL.md). Laptop dan HP memakai jaringan yang sama; container app tetap berjalan di laptop.
 
 ## Struktur kode
 
@@ -100,13 +106,22 @@ Jika port 8080 sudah dipakai, ubah `APP_PORT=8081` dan `PUBLIC_ORIGIN=http://loc
 | --- | --- |
 | `backend/cmd/gilir/main.go` | Titik masuk server dan perintah administrasi |
 | `backend/internal/app/http.go` | Route, respons JSON, middleware, dan penyajian frontend |
+| `backend/internal/app/navigation.go` | Middleware pengalihan halaman berdasarkan sesi dan peran |
 | `backend/internal/app/auth.go` | Login, cookie sesi, CSRF, logout, dan ganti kata sandi |
 | `backend/internal/app/booking.go` | Transaksi booking, idempotensi, perubahan jadwal, dan status |
 | `backend/internal/app/calendar.go` | Aturan waktu, jam kerja, istirahat, dan benturan jadwal |
 | `backend/internal/app/availability.go` | Pilihan jam dari data server |
 | `backend/internal/app/settings.go` | Pengaturan usaha, layanan, barber, izin, dan akun staf |
+| `backend/internal/app/deletion.go` | Penghapusan dengan perlindungan booking dan pencabutan sesi |
+| `backend/internal/app/content.go` | Kontak, tampilan publik, galeri, dan FAQ |
+| `backend/internal/app/media.go` | Validasi unggahan, pemrosesan foto, dan akses media |
+| `backend/internal/app/reviews.go` | Ulasan satu per kunjungan selesai dan ringkasan rating |
 | `backend/internal/app/migrations/` | Migrasi SQL yang ditanamkan ke binary Go |
+| `frontend/src/app.tsx` | Pemeriksaan sesi dan navigasi aplikasi |
+| `frontend/src/service-actions.tsx` | Tombol mulai, selesai, dan tidak hadir beserta batas waktunya |
 | `frontend/src/public.tsx` | Beranda dan halaman informasi publik |
+| `frontend/src/gallery.tsx`, `reviews.tsx` | Slider foto dan ulasan pelanggan |
+| `frontend/src/public-settings.tsx` | Editor konten publik dan unggahan foto |
 | `frontend/src/booking.tsx` | Pemilihan jadwal dan tiket privat pelanggan |
 | `frontend/src/staff.tsx` | Login, agenda, detail booking, dan editor katalog |
 | `frontend/src/staff-settings.tsx` | Akun staf, kata sandi, dan izin barber |
@@ -132,15 +147,43 @@ Baca [panduan Go untuk proyek ini](docs/BELAJAR_GO.md), [kontrak API](docs/API.m
 - Setiap perubahan booking membawa `version`. Permintaan dari detail lama ditolak agar tidak menimpa perubahan orang lain.
 - Kunci idempotensi berlaku 24 jam. Mengirim ulang isian yang sama dengan kunci yang sama mengembalikan booking awal. Kunci yang sama dengan isian berbeda ditolak.
 - Status bergerak dari `confirmed` ke `serving`, `cancelled`, atau `no-show`. `serving` dilanjutkan ke `completed`. Layanan mulai pada atau setelah waktu terjadwal. Tidak hadir dapat ditandai pada atau setelah waktu selesai terjadwal.
+- Satu barber hanya boleh memiliki satu kunjungan Sedang dilayani, termasuk ketika pelayanan melewati jam selesai rencana. Catat selesai pada kunjungan sebelumnya sebelum memulai berikutnya.
 - Slot untuk `confirmed`, `serving`, dan `completed` tetap dicadangkan pada rentang rencana awal. Pembatalan melepas slot. Sistem belum melakukan perpanjangan otomatis jika pelayanan melewati durasi rencana.
 - Perubahan katalog atau kalender yang mengganggu booking mendatang atau sedang dilayani ditolak dengan kode booking yang harus ditangani.
 - Tautan privat hanya membuka satu booking dan berakhir 30 hari setelah waktu selesai jadwal terakhir. Tautan yang hilang perlu ditangani melalui Admin.
+- Pelanggan hanya dapat memberi satu ulasan setelah status `completed`. Pemeriksaan berlaku di API dan trigger database. Pengiriman ulang isian ulasan yang sama mengembalikan ulasan awal.
+- Tiket pelanggan memperbarui status setiap 30 detik saat tab terlihat, serta ketika tab kembali aktif. Formulir ulasan ikut terbuka setelah status Selesai terbaca.
+- Admin dapat menyalin tautan privat pelanggan dari detail booking online maupun walk-in. Tautan tersebut memberikan akses ke booking terkait; bagikan hanya kepada pelanggan itu.
+- Hapus layanan/barber ditolak jika masih ada booking `confirmed` atau `serving`, termasuk booking lama yang statusnya belum ditangani. Data dihapus dari katalog aktif dengan riwayat tetap tersimpan. Hapus barber juga menghapus akses akun yang terkait.
+- Hapus akun mengakhiri seluruh sesinya. Profil barber dan riwayat booking tetap tersimpan. Akun yang sedang dipakai dan Admin aktif terakhir tidak dapat dihapus.
+
+## Konten publik dinamis
+
+| Data | Letak pengaturan Admin |
+| --- | --- |
+| Nama, alamat, jam buka, tanggal tutup, Maps, Instagram, WhatsApp | Profil & jam buka |
+| Logo, judul/deskripsi/foto pembuka, judul/deskripsi galeri, tagline footer | Tampilan publik |
+| Nama, kategori, harga, durasi 15–360 menit, deskripsi, status layanan | Layanan |
+| Nama, keahlian, jam kerja, istirahat, libur, penugasan layanan | Barber |
+| Foto, judul, caption, teks alternatif, urutan, draft/publikasi | Galeri |
+| Pertanyaan dan jawaban, urutan, status tampil | FAQ |
+| Rating dan ulasan dari pelanggan terverifikasi | Ulasan, hanya baca |
+
+Galeri menampilkan foto dalam slider yang bisa digeser atau dikendalikan dengan tombol. Foto belum tersedia sampai Admin mengunggah dan memublikasikan foto asli. Tidak ada foto pelanggan atau rating buatan. Teks “DI KURSI CUKUR” dan “01 / GADING SERPONG” sudah dihapus dari pembuka.
+
+Kontak awal dikosongkan agar tidak mengarah ke akun yang keliru. Masukkan WhatsApp dan Instagram milik usaha. Untuk peta, salin HTML melalui Google Maps → Bagikan → Sematkan peta, lalu tempel pada kolom sematan. Hanya URL sematan resmi Google Maps yang diterima; HTML tidak dijalankan. Tombol buka Maps menggunakan tautan yang diisi Admin, atau pencarian berdasarkan alamat jika belum diisi.
+
+Unggahan menerima JPG/PNG/WebP maksimal 8 MB dan 24 megapiksel, disimpan ulang sebagai JPEG maksimal sisi panjang 2.200 piksel. Orientasi EXIF foto JPEG diterapkan sebelum metadata gambar dibuang, agar foto ponsel tidak menyamping. Gambar draft hanya dapat dibuka Admin; publik mendapat gambar yang dipakai sebagai logo/foto pembuka atau galeri aktif dengan izin. File yang sudah tidak dipakai tetap berada di penyimpanan privat; pembersihan otomatis belum tersedia.
+
+Ulasan tampil setelah dikirim pelanggan dari tautan privat. Admin tidak dapat menulis ulang rating pelanggan. Ulasan tidak menampilkan nomor WhatsApp, kode booking, atau token. Tidak ada pengiriman tautan otomatis melalui WhatsApp.
 
 Sistem memakai kunci pada satu baris usaha untuk mengurutkan perubahan kalender, ditambah exclusion constraint PostgreSQL sebagai perlindungan benturan slot. Desain ini ditujukan untuk satu lokasi, bukan throughput multi-cabang dalam skala besar.
 
 ## Akses dan data
 
 Admin mengelola seluruh operasional. Barber hanya dapat membaca booking yang ditugaskan kepadanya dan mengubah status pelayanannya. Nomor pelanggan dan riwayat internal tidak dikirim dalam respons akun barber. Tidak ada pemilih peran pada login atau role yang dipercaya dari browser.
+
+Selama sesi staf masih aktif, membuka `/` atau menghapus path `/admin` mengarahkan Admin ke `/admin/agenda` dan Barber ke `/admin/jadwal`. Beranda pelanggan dapat dibuka setelah logout atau dari profil browser lain. Tautan logo di sidebar staf menuju dashboard perannya.
 
 Sesi menggunakan cookie HttpOnly, SameSite Lax, serta batas 12 jam di server. Semua perubahan staf memerlukan token CSRF. Menonaktifkan akun, menonaktifkan profil barber, reset kata sandi, atau ganti kata sandi mengakhiri sesi terkait. Hash kata sandi memakai Argon2id.
 
@@ -157,7 +200,9 @@ docker compose -f compose.test.yaml up --build --abort-on-container-exit --exit-
 docker compose -f compose.test.yaml down
 ```
 
-Perintah pertama harus berakhir dengan exit code 0. Tes menguji benturan slot bersamaan, idempotensi, snapshot harga dan durasi, perubahan jadwal yang gagal, pembatasan peran, CSRF, status layanan, dan izin barber.
+Untuk menguji antarmuka dengan Node 24, jalankan `npm ci` lalu `npm test` dari folder `frontend`. Sebanyak 24 tes antarmuka mencakup navigasi staf, kedaluwarsa sesi, aktivasi tombol sesuai waktu, formulir ulasan, pembaruan tiket, konten dinamis, penghapusan akun, dialog, dan unggahan multipart. Tes browser dan HTTPS/restore tambahan dijelaskan pada [VALIDASI.md](docs/VALIDASI.md).
+
+Perintah tes database harus berakhir dengan exit code 0. Tes menguji benturan slot bersamaan, idempotensi, snapshot harga dan durasi, perubahan jadwal yang gagal, pembatasan peran, CSRF, status layanan, dan izin barber.
 
 ## Backup dan pemulihan
 
@@ -167,7 +212,9 @@ Dari folder proyek pada PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\backup.ps1
 ```
 
-Salinan berformat PostgreSQL custom dump akan berada di folder `backups`. Simpan salinan terenkripsi di lokasi terpisah bersama `.env` dan versi kode. Dump memuat data pelanggan dan hash akun, sehingga aksesnya harus terbatas.
+Salinan berformat PostgreSQL custom dump dan folder foto `gilir-TANGGAL-JAM-uploads` akan berada di folder `backups`. Simpan keduanya di lokasi terpisah bersama `.env` dan versi kode. Batasi akses karena dump berisi data pelanggan dan hash akun. Untuk pasangan backup yang konsisten, jadwalkan saat Admin berhenti mengunggah atau mengubah publikasi foto.
+
+Di server Linux dengan konfigurasi produksi, gunakan `bash scripts/backup.sh --production`. Skrip menghasilkan satu folder berisi dump, foto, dan SHA256SUMS, lalu menandainya lengkap setelah seluruh salinan berhasil. Folder `.partial` menandakan backup gagal dan tidak boleh dianggap lengkap.
 
 Uji pemulihan ke database baru, bukan langsung ke database operasional. Ganti nama file contoh berikut dengan hasil backup yang benar.
 
@@ -180,13 +227,15 @@ docker compose exec db psql -U gilir -d gilir_restore_check -c "SELECT count(*) 
 
 Periksa booking dan riwayat pada hasil pemulihan sebelum menetapkan prosedur produksi. Database `gilir_restore_check` berdiri sendiri dan tidak mengubah koneksi website. Jangan menggunakan `--clean` pada database operasional tanpa rencana pemulihan yang sudah disepakati.
 
+Jika berpindah server, pulihkan folder foto ke `/app/uploads` pada volume `uploads` dan pertahankan kepemilikan UID/GID `10001:10001`. Memulihkan dump saja tidak mengembalikan file foto. Panduan pembaruan memuat pemeriksaan penyimpanan.
+
 ## Sebelum digunakan publik
 
-Proyek ini siap dijalankan lokal dan menjadi dasar pengujian penerimaan. Deployment domain publik belum dilakukan.
+Kode telah diuji untuk pemasangan ke staging. Deployment ke server dan domain client belum dilakukan, sehingga status produksi harus ditetapkan setelah pemeriksaan di server tujuan.
 
-Gunakan server yang dapat menjalankan container Go dan PostgreSQL. Tempatkan reverse proxy HTTPS di depan aplikasi. Atur `PUBLIC_ORIGIN` ke origin domain sebenarnya dan `COOKIE_SECURE=true`. Ikat port aplikasi ke loopback jika reverse proxy berada di host yang sama. Pertahankan database di jaringan privat.
+Gunakan server Linux yang dapat menjalankan container Go dan PostgreSQL. Paket menyediakan `compose.production.yaml` dan Caddy untuk HTTPS. Konfigurasi produksi menutup port app/database dari host dan menetapkan cookie Secure, origin domain, IP proxy yang dipercaya, batas memori, dan rotasi log. Proxy dibangun dari modul terpisah pada `deploy/proxy`, memakai Go yang sudah diperbarui dan dependensi yang dipatok. Ikuti [DEPLOY_PRODUKSI.md](docs/DEPLOY_PRODUKSI.md), termasuk persiapan DNS dan pemulihan data saat berpindah dari laptop.
 
-Pembatasan percobaan masuk dan pembuatan booking saat ini berada di memori satu proses dan memakai alamat koneksi langsung. Jika memakai reverse proxy, tambahkan pembatasan per IP pengunjung pada proxy tersebut. Untuk beberapa instance aplikasi, gunakan pembatasan bersama. Tidak ada kepercayaan otomatis terhadap header X-Forwarded-For dari pengunjung.
+Pembatasan percobaan masuk dan pembuatan booking berada di memori satu proses. Tanpa konfigurasi proxy, alamat koneksi langsung menjadi acuan. `TRUSTED_PROXY_CIDRS` mengizinkan pembacaan `X-Real-IP` hanya dari proxy tertentu; Caddy mengganti header tersebut dengan alamat koneksi pengunjung. Header yang dikirim pengunjung langsung dan rantai `X-Forwarded-For` tidak dipercaya. Konfigurasi ini mendukung satu app di belakang satu Caddy yang menerima koneksi langsung dari internet. Untuk beberapa app atau CDN/proxy tambahan, sesuaikan mekanisme IP dan pembatasan bersama sebelum rilis.
 
 Sebelum rilis, lengkapi data usaha dan kontak bantuan, uji operasional bersama pemilik dan barber, pastikan backup bisa dipulihkan, serta tetapkan kebijakan penyimpanan data pelanggan. Tidak ada pengiriman WhatsApp otomatis pada versi ini. Nama dan nomor yang diisikan dipakai sebagai data booking internal.
 

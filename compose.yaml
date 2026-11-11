@@ -17,7 +17,7 @@ services:
       retries: 20
     restart: unless-stopped
   app:
-    image: gilir-local:0.1.0
+    image: gilir-local:0.2.2
     build:
       context: .
       target: app
@@ -26,6 +26,8 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
       TOKEN_KEY: ${TOKEN_KEY:?Buat .env melalui scripts/setup.ps1 atau scripts/setup.mjs}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - uploads:/app/uploads
     ports:
       - '${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080'
     depends_on:
@@ -37,7 +39,7 @@ services:
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
   tools:
-    image: gilir-local:0.1.0
+    image: gilir-local:0.2.2
     pull_policy: never
     profiles: [tools]
     environment:
@@ -51,3 +53,4 @@ services:
     command: [migrate]
 volumes:
   pgdata:
+  uploads:

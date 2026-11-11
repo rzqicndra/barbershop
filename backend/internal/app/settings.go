@@ -47,6 +47,9 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request) error {
 		if catalog.Profile.Version != input.Version {
 			return conflict("SETTINGS_CHANGED", "Pengaturan sudah berubah. Muat ulang halaman.")
 		}
+		if err := validatePublicProfile(r.Context(), tx, &input); err != nil {
+			return err
+		}
 		catalog.Profile = input
 		codes, err := a.affected(r.Context(), tx, catalog)
 		if err != nil {
@@ -55,8 +58,10 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request) error {
 		if err := checkAffected(codes); err != nil {
 			return err
 		}
-		_, err = tx.Exec(r.Context(), "UPDATE shop SET name=$1,location=$2,opens_at=$3,closes_at=$4,closed_dates=$5,version=version+1 WHERE id=1",
-			input.Name, input.Location, input.Open, input.Close, input.ClosedDates)
+		_, err = tx.Exec(r.Context(), `UPDATE shop SET name=$1,location=$2,opens_at=$3,closes_at=$4,closed_dates=$5,maps_url=$6,maps_embed_url=$7,instagram_url=$8,whatsapp=$9,wordmark=$10,logo_image_url=$11,
+ hero_eyebrow=$12,hero_title=$13,hero_description=$14,hero_image_url=$15,footer_tagline=$16,gallery_title=$17,gallery_description=$18,version=version+1 WHERE id=1`,
+			input.Name, input.Location, input.Open, input.Close, input.ClosedDates, input.MapsURL, input.MapsEmbedURL, input.InstagramURL, input.WhatsApp, input.Wordmark, input.LogoImageURL,
+			input.HeroEyebrow, input.HeroTitle, input.HeroDescription, input.HeroImageURL, input.FooterTagline, input.GalleryTitle, input.GalleryDescription)
 		return err
 	})
 	if err != nil {
@@ -67,9 +72,16 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request) error {
 
 func validateService(input *Service) error {
 	input.Name, input.Description = strings.TrimSpace(input.Name), strings.TrimSpace(input.Description)
+	input.Category = strings.TrimSpace(input.Category)
+	if input.Category == "" {
+		input.Category = "Potong & styling"
+	}
+	if utf8.RuneCountInString(input.Category) > 50 {
+		return invalid("Kategori maksimal 50 karakter.")
+	}
 	if utf8.RuneCountInString(input.Name) < 2 || utf8.RuneCountInString(input.Name) > 80 || len(input.Description) > 500 ||
-		input.Price < 0 || input.Price > 10000000 || input.Duration < 15 || input.Duration > 180 {
-		return invalid("Periksa nama layanan, harga, dan durasi 15 sampai 180 menit.")
+		input.Price < 0 || input.Price > 10000000 || input.Duration < 15 || input.Duration > 360 {
+		return invalid("Periksa nama layanan, harga, dan durasi 15 sampai 360 menit.")
 	}
 	return nil
 }
@@ -84,8 +96,8 @@ func (a *App) createService(w http.ResponseWriter, r *http.Request) error {
 	}
 	input.ID = newID()
 	err := locked(r.Context(), a, func(tx pgx.Tx) error {
-		_, err := tx.Exec(r.Context(), "INSERT INTO services(id,name,description,price,duration,active) VALUES($1,$2,$3,$4,$5,$6)",
-			input.ID, input.Name, input.Description, input.Price, input.Duration, input.Active)
+		_, err := tx.Exec(r.Context(), "INSERT INTO services(id,name,description,price,duration,active,category) VALUES($1,$2,$3,$4,$5,$6,$7)",
+			input.ID, input.Name, input.Description, input.Price, input.Duration, input.Active, input.Category)
 		return err
 	})
 	if err != nil {
@@ -132,8 +144,8 @@ func (a *App) updateService(w http.ResponseWriter, r *http.Request) error {
 		if err := checkAffected(codes); err != nil {
 			return err
 		}
-		_, err = tx.Exec(r.Context(), "UPDATE services SET name=$1,description=$2,price=$3,duration=$4,active=$5,version=version+1 WHERE id=$6",
-			input.Name, input.Description, input.Price, input.Duration, input.Active, id)
+		_, err = tx.Exec(r.Context(), "UPDATE services SET name=$1,description=$2,price=$3,duration=$4,active=$5,category=$7,version=version+1 WHERE id=$6",
+			input.Name, input.Description, input.Price, input.Duration, input.Active, id, input.Category)
 		return err
 	})
 	if err != nil {
@@ -324,7 +336,7 @@ func (a *App) deleteTimeOff(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *App) listStaff(w http.ResponseWriter, r *http.Request) error {
-	rows, err := a.db.Query(r.Context(), "SELECT id::text,email,name,role,COALESCE(barber_id::text,''),active FROM staff ORDER BY role,email")
+	rows, err := a.db.Query(r.Context(), "SELECT id::text,email,name,role,COALESCE(barber_id::text,''),active FROM staff WHERE deleted_at IS NULL ORDER BY role,email")
 	if err != nil {
 		return err
 	}
@@ -364,15 +376,18 @@ func (a *App) createStaff(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	var exists bool
-	if err = a.db.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM barbers WHERE id=$1)", input.BarberID).Scan(&exists); err != nil {
+	err = locked(r.Context(), a, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM barbers WHERE id=$1 AND deleted_at IS NULL)", input.BarberID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return invalid("Profil barber tidak ditemukan.")
+		}
+		_, err := tx.Exec(r.Context(), "INSERT INTO staff(id,email,name,password_hash,role,barber_id) VALUES($1,$2,$3,$4,'barber',$5)",
+			newID(), email, strings.TrimSpace(input.Name), hash, input.BarberID)
 		return err
-	}
-	if !exists {
-		return invalid("Profil barber tidak ditemukan.")
-	}
-	_, err = a.db.Exec(r.Context(), "INSERT INTO staff(id,email,name,password_hash,role,barber_id) VALUES($1,$2,$3,$4,'barber',$5)",
-		newID(), email, strings.TrimSpace(input.Name), hash, input.BarberID)
+	})
 	if err != nil {
 		return err
 	}
@@ -395,7 +410,7 @@ func (a *App) updateStaff(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), "UPDATE staff SET active=$1 WHERE id=$2 AND role='barber'", input.Active, id)
+	tag, err := tx.Exec(r.Context(), "UPDATE staff SET active=$1 WHERE id=$2 AND role='barber' AND deleted_at IS NULL", input.Active, id)
 	if err != nil {
 		return err
 	}
@@ -433,7 +448,7 @@ func (a *App) resetStaffPassword(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), "UPDATE staff SET password_hash=$1 WHERE id=$2 AND role='barber'", hash, id)
+	tag, err := tx.Exec(r.Context(), "UPDATE staff SET password_hash=$1 WHERE id=$2 AND role='barber' AND deleted_at IS NULL", hash, id)
 	if err != nil {
 		return err
 	}

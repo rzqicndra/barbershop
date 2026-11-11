@@ -1,0 +1,72 @@
+# Apply together with compose.yaml on a single Linux server.
+# Docker Compose 2.24.4+ supports the !reset tag used to remove the app port.
+services:
+  db:
+    mem_limit: 768m
+    pids_limit: 256
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+  app:
+    ports: !reset []
+    environment:
+      APP_ENV: production
+      PUBLIC_ORIGIN: https://${DOMAIN:?Isi DOMAIN dengan domain yang diarahkan ke server}
+      COOKIE_SECURE: 'true'
+      EXTRA_ORIGINS: ''
+      TRUSTED_PROXY_CIDRS: ${PROXY_IPV4:-172.30.50.10}/32
+      GOMEMLIMIT: 600MiB
+    networks:
+      default: {}
+      edge: {}
+    mem_limit: 768m
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+  proxy:
+    image: gilir-proxy:0.2.2
+    build:
+      context: .
+      dockerfile: deploy/proxy.Dockerfile
+    environment:
+      DOMAIN: ${DOMAIN:?Isi DOMAIN dengan domain yang diarahkan ke server}
+      ACME_EMAIL: ${ACME_EMAIL:?Isi email pengelola sertifikat}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        ipv4_address: ${PROXY_IPV4:-172.30.50.10}
+    depends_on:
+      app:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 192m
+    pids_limit: 128
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${PROXY_SUBNET:-172.30.50.0/24}
+volumes:
+  caddy_data:
+  caddy_config:

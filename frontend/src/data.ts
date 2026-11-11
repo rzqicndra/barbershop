@@ -1,6 +1,7 @@
 import { serverNow } from './clock'
 
 export type Service = {
+  category?: string
   id: string
   name: string
   description: string
@@ -35,6 +36,8 @@ export type Role = 'admin' | 'barber'
 export type SlotMode = 'online' | 'walk-in' | 'admin'
 export type History = { action: string; by: string; at: number; detail?: string }
 export type Booking = {
+  barberName?: string
+  review?: Review
   id: string
   token?: string
   code: string
@@ -68,7 +71,24 @@ export type Studio = {
     close: number
     closedDates: string[]
     version: number
+    mapsUrl?: string
+    mapsEmbedUrl?: string
+    instagramUrl?: string
+    whatsapp?: string
+    wordmark?: string
+    logoImageUrl?: string
+    heroEyebrow?: string
+    heroTitle?: string
+    heroDescription?: string
+    heroImageUrl?: string
+    footerTagline?: string
+    galleryTitle?: string
+    galleryDescription?: string
   }
+  gallery?: GalleryPhoto[]
+  faqs?: FAQ[]
+  reviews?: Review[]
+  rating?: { average: number; count: number }
   services: Service[]
   barbers: Barber[]
   timeOff: TimeOff[]
@@ -134,4 +154,51 @@ export function statusActions(booking: Booking, now = serverNow()): BookingStatu
   const start = timestamp(booking.date, booking.start)
   if (now < start) return []
   return now >= start + booking.duration * 60_000 ? ['serving', 'no-show'] : ['serving']
+}
+
+export type GalleryPhoto = {
+  id: string
+  imageUrl: string
+  title: string
+  caption: string
+  altText: string
+  sortOrder: number
+  active: boolean
+  consentConfirmed: boolean
+  version: number
+}
+export type FAQ = {
+  id: string
+  question: string
+  answer: string
+  sortOrder: number
+  active: boolean
+  version: number
+}
+export type Review = {
+  id: string
+  rating: number
+  displayName: string
+  comment: string
+  serviceName: string
+  barberName: string
+  createdAt: string
+}
+export type MediaAsset = { id: string; url: string; width: number; height: number; size: number }
+export function mapsLink(profile: Studio['profile']) {
+  return (
+    profile.mapsUrl ||
+    'https://www.google.com/maps/search/?' +
+      new URLSearchParams({ api: '1', query: profile.location })
+  )
+}
+export function whatsappLink(profile: Studio['profile']) {
+  return profile.whatsapp
+    ? 'https://wa.me/' +
+        profile.whatsapp +
+        '?' +
+        new URLSearchParams({
+          text: 'Halo ' + profile.name + ', saya ingin menyampaikan kritik atau saran.',
+        })
+    : ''
 }

@@ -31,6 +31,22 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	command := "serve"
+	if len(os.Args) > 1 {
+		command = os.Args[1]
+	}
+	if command == "healthcheck" {
+		client := &http.Client{Timeout: 3 * time.Second}
+		response, err := client.Get(env("HEALTHCHECK_URL", "http://127.0.0.1:8080/api/v1/health"))
+		if err != nil {
+			return errors.New("aplikasi tidak merespons pemeriksaan kesehatan")
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return errors.New("aplikasi atau database belum sehat")
+		}
+		return nil
+	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		return errors.New("DATABASE_URL belum diisi")
@@ -51,10 +67,6 @@ func run() error {
 	defer pool.Close()
 	if err = pool.Ping(ctx); err != nil {
 		return errors.New("database tidak dapat dijangkau, periksa DATABASE_URL dan status PostgreSQL")
-	}
-	command := "serve"
-	if len(os.Args) > 1 {
-		command = os.Args[1]
 	}
 	switch command {
 	case "migrate":
@@ -79,14 +91,14 @@ func run() error {
 		return createOwner(ctx, pool)
 	case "serve":
 	default:
-		return errors.New("perintah tersedia: serve, migrate, seed, admin:create")
+		return errors.New("perintah tersedia: serve, migrate, seed, admin:create, healthcheck")
 	}
 	if err = app.Ready(ctx, pool); err != nil {
 		return err
 	}
 	origin := strings.TrimRight(os.Getenv("PUBLIC_ORIGIN"), "/")
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("PUBLIC_ORIGIN harus berupa origin, misalnya http://localhost:8080")
 	}
 	key, err := hex.DecodeString(os.Getenv("TOKEN_KEY"))
@@ -97,13 +109,16 @@ func run() error {
 	if err != nil || (parsed.Scheme == "https" && !secure) {
 		return errors.New("COOKIE_SECURE harus true untuk PUBLIC_ORIGIN HTTPS")
 	}
+	if os.Getenv("APP_ENV") == "production" && (parsed.Scheme != "https" || !secure || os.Getenv("EXTRA_ORIGINS") != "") {
+		return errors.New("produksi memerlukan PUBLIC_ORIGIN HTTPS, COOKIE_SECURE=true, dan EXTRA_ORIGINS kosong")
+	}
 	extra := []string{}
 	if raw := os.Getenv("EXTRA_ORIGINS"); raw != "" {
 		for _, value := range strings.Split(raw, ",") {
 			extra = append(extra, strings.TrimSpace(value))
 		}
 	}
-	application, err := app.New(pool, app.Options{Origin: origin, ExtraOrigins: extra, TokenKey: key, SecureCookies: secure, WebDirectory: env("WEB_DIR", "../frontend/dist")})
+	application, err := app.New(pool, app.Options{Origin: origin, ExtraOrigins: extra, TokenKey: key, SecureCookies: secure, TrustedProxyCIDRs: strings.Split(os.Getenv("TRUSTED_PROXY_CIDRS"), ","), UploadDirectory: env("UPLOAD_DIR", "../data/uploads"), WebDirectory: env("WEB_DIR", "../frontend/dist")})
 	if err != nil {
 		return err
 	}
