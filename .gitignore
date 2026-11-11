@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+node_modules/
+frontend/dist/
+backend/bin/
+*.log
+.DS_Store
+backups/
+.openai/

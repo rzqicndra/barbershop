@@ -1,0 +1,53 @@
+name: gilir
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: gilir
+      POSTGRES_USER: gilir
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Buat .env melalui scripts/setup.ps1 atau scripts/setup.mjs}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Buat .env melalui scripts/setup.ps1 atau scripts/setup.mjs}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/10-runtime-user.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U gilir -d gilir']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    image: gilir-local:0.1.0
+    build:
+      context: .
+      target: app
+    environment:
+      DATABASE_URL: postgres://gilir_app:${APP_DB_PASSWORD}@db:5432/gilir?sslmode=disable
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      TOKEN_KEY: ${TOKEN_KEY:?Buat .env melalui scripts/setup.ps1 atau scripts/setup.mjs}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080'
+    depends_on:
+      db:
+        condition: service_healthy
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+  tools:
+    image: gilir-local:0.1.0
+    pull_policy: never
+    profiles: [tools]
+    environment:
+      DATABASE_URL: postgres://gilir:${DB_PASSWORD}@db:5432/gilir?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [migrate]
+volumes:
+  pgdata:
